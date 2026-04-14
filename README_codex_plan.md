@@ -28,6 +28,9 @@ python nebraska_passport_scraper.py scrape \
   --geocode
 ```
 
+By default, scraping now **keeps every discovered page record** (no deduplication).  
+If you want merge behavior, add `--dedupe`.
+
 Run a quick test scrape:
 
 ```bash

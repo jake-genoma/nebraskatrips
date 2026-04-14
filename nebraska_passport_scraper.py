@@ -814,22 +814,29 @@ def run_scrape(args: argparse.Namespace) -> None:
         record = parse_stop_page(url, session, year_map.get(url.rstrip("/"), set()))
         records.append(record)
 
-    deduped = deduplicate_records(records)
-    logging.info("Deduplicated %s raw records down to %s unique stops", len(records), len(deduped))
+    if args.dedupe:
+        working_records = deduplicate_records(records)
+        logging.info("Deduplicated %s raw records down to %s unique stops", len(records), len(working_records))
+    else:
+        # Preserve every discovered page as its own row by keying uniqueness to source URL.
+        for record in records:
+            record.duplicate_key = f"url::{canonicalize_url(record.source_url)}"
+        working_records = records
+        logging.info("Deduplication disabled; keeping all %s raw records", len(working_records))
 
     if args.geocode:
         cache: dict[str, tuple[float, float]] = {}
-        for idx, record in enumerate(deduped, start=1):
-            logging.info("Geocoding [%s/%s] %s", idx, len(deduped), record.name)
+        for idx, record in enumerate(working_records, start=1):
+            logging.info("Geocoding [%s/%s] %s", idx, len(working_records), record.name)
             geocode_record(record, session, cache)
 
-    export_records(deduped, outdir)
+    export_records(working_records, outdir)
     logging.info("Wrote output files to %s", outdir.resolve())
 
     if args.sqlite:
         sqlite_path = Path(args.sqlite)
-        write_sqlite(deduped, sqlite_path)
-        logging.info("Upserted %s records to %s", len(deduped), sqlite_path.resolve())
+        write_sqlite(working_records, sqlite_path)
+        logging.info("Upserted %s records to %s", len(working_records), sqlite_path.resolve())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -842,6 +849,7 @@ def build_parser() -> argparse.ArgumentParser:
     scrape.add_argument("--seed-urls", type=str, default="", help="Optional text file with explicit stop URLs")
     scrape.add_argument("--sqlite", type=str, default="", help="Optional SQLite path to upsert records")
     scrape.add_argument("--geocode", action="store_true", help="Enable Nominatim geocoding")
+    scrape.add_argument("--dedupe", action="store_true", help="Enable deduplication (off by default)")
 
     plan = sub.add_parser("plan", help="Run interactive route-ranking trip planner")
     plan.add_argument("--sqlite", type=str, required=True, help="SQLite path containing stops table")
