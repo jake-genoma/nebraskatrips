@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS stops (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    duplicate_key TEXT,
     slug TEXT,
     address_raw TEXT,
     street TEXT,
@@ -9,7 +10,8 @@ CREATE TABLE IF NOT EXISTS stops (
     postal_code TEXT,
     phone TEXT,
     website_url TEXT,
-    source_url TEXT UNIQUE,
+    source_url TEXT,
+    source_urls TEXT,
     source_group TEXT DEFAULT 'nebraska_passport',
     passport_years TEXT,
     passport_bonus_stop INTEGER DEFAULT 0,
@@ -26,7 +28,8 @@ CREATE TABLE IF NOT EXISTS stops (
     indoor_outdoor TEXT,
     estimated_visit_minutes INTEGER,
     llm_context TEXT,
-    last_scraped_at TEXT DEFAULT CURRENT_TIMESTAMP
+    last_scraped_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(duplicate_key)
 );
 
 CREATE TABLE IF NOT EXISTS stop_hours (
@@ -49,4 +52,4 @@ CREATE TABLE IF NOT EXISTS stop_tags (
 
 CREATE INDEX IF NOT EXISTS idx_stops_city ON stops(city);
 CREATE INDEX IF NOT EXISTS idx_stops_category ON stops(category_normalized);
-CREATE INDEX IF NOT EXISTS idx_stops_source_url ON stops(source_url);
+CREATE INDEX IF NOT EXISTS idx_stops_duplicate_key ON stops(duplicate_key);
