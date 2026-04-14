@@ -93,6 +93,10 @@ def normalize_token(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", clean_text(text).lower())
 
 
+def canonicalize_url(url: str) -> str:
+    return url.rstrip("/")
+
+
 def infer_year_from_url(url: str) -> str:
     parsed = urlparse(url)
     candidates = re.findall(r"(20\d{2})", f"{parsed.path} {parsed.query}")
@@ -368,19 +372,46 @@ def parse_stop_page(url: str, session: requests.Session, known_years: Optional[s
     else:
         record.indoor_outdoor = "mixed"
 
-    record.duplicate_key = f"{normalize_token(record.name)}::{normalize_token(record.city)}"
+    record.duplicate_key = build_duplicate_key(record)
     record.llm_context = build_llm_context(record)
     return record
 
 
+def build_duplicate_key(record: StopRecord) -> str:
+    """Generate a conservative dedupe key.
+
+    We only dedupe aggressively when we have strong location signals.
+    If address/city signals are weak, we keep URL-level uniqueness to avoid
+    collapsing distinct stops that happen to share partial names.
+    """
+
+    name_key = normalize_token(record.name)
+    city_key = normalize_token(record.city)
+    street_key = normalize_token(record.street)
+    postal_key = normalize_token(record.postal_code)
+
+    if not name_key:
+        return f"url::{canonicalize_url(record.source_url)}"
+    if street_key and city_key:
+        return f"name_addr::{name_key}::{street_key}::{city_key}"
+    if city_key and postal_key:
+        return f"name_city_postal::{name_key}::{city_key}::{postal_key}"
+    if city_key:
+        return f"name_city::{name_key}::{city_key}"
+    return f"url::{canonicalize_url(record.source_url)}"
+
+
 def deduplicate_records(records: list[StopRecord]) -> list[StopRecord]:
     merged: dict[str, StopRecord] = {}
+    dedup_hits = 0
     for record in records:
-        key = record.duplicate_key or f"url::{record.source_url}"
+        key = record.duplicate_key or build_duplicate_key(record)
+        record.duplicate_key = key
         if key not in merged:
             merged[key] = record
             continue
 
+        dedup_hits += 1
         current = merged[key]
 
         merged_urls = sorted(set(filter(None, current.source_urls.split(",") + record.source_urls.split(","))))
@@ -407,6 +438,7 @@ def deduplicate_records(records: list[StopRecord]) -> list[StopRecord]:
         current.tags = ", ".join(sorted(tag_set))
         current.llm_context = build_llm_context(current)
 
+    logging.info("Dedup merge events: %s", dedup_hits)
     return sorted(merged.values(), key=lambda r: (r.city or "", r.name or ""))
 
 
@@ -730,6 +762,37 @@ Include driving order, time estimates, lunch timing, and why each stop matches u
         conn.close()
 
 
+def export_sqlite(sqlite_path: Path, xlsx_path: Path, csv_dir: Optional[Path] = None) -> None:
+    conn = sqlite3.connect(sqlite_path)
+    try:
+        tables = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+        ]
+        if not tables:
+            logging.warning("No tables found in %s", sqlite_path)
+            return
+
+        xlsx_path.parent.mkdir(parents=True, exist_ok=True)
+        with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+            for table in tables:
+                df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+                sheet_name = table[:31] if table else "Sheet1"
+                df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+                if csv_dir:
+                    csv_dir.mkdir(parents=True, exist_ok=True)
+                    df.to_csv(csv_dir / f"{table}.csv", index=False)
+
+        logging.info("Exported %s tables to %s", len(tables), xlsx_path.resolve())
+        if csv_dir:
+            logging.info("Also exported CSV files to %s", csv_dir.resolve())
+    finally:
+        conn.close()
+
+
 def run_scrape(args: argparse.Namespace) -> None:
     outdir = Path(args.outdir)
     session = requests.Session()
@@ -783,6 +846,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan = sub.add_parser("plan", help="Run interactive route-ranking trip planner")
     plan.add_argument("--sqlite", type=str, required=True, help="SQLite path containing stops table")
 
+    export = sub.add_parser("export", help="Export SQLite tables to Excel (and optional CSVs)")
+    export.add_argument("--sqlite", type=str, required=True, help="SQLite path to export")
+    export.add_argument("--xlsx", type=str, default="output/nebraska_trips_export.xlsx", help="Excel output path")
+    export.add_argument("--csv-dir", type=str, default="", help="Optional folder to also write per-table CSV files")
+
     return parser
 
 
@@ -796,6 +864,12 @@ def main() -> None:
         run_scrape(args)
     elif args.command == "plan":
         interactive_plan(Path(args.sqlite))
+    elif args.command == "export":
+        export_sqlite(
+            sqlite_path=Path(args.sqlite),
+            xlsx_path=Path(args.xlsx),
+            csv_dir=Path(args.csv_dir) if args.csv_dir else None,
+        )
 
 
 if __name__ == "__main__":

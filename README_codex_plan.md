@@ -40,6 +40,15 @@ Run interactive planning flow:
 python nebraska_passport_scraper.py plan --sqlite output/nebraska_trips.db
 ```
 
+Export SQLite to Excel (plus optional CSV files) so you can open in Excel/Sheets:
+
+```bash
+python nebraska_passport_scraper.py export \
+  --sqlite output/nebraska_trips.db \
+  --xlsx output/nebraska_trips_export.xlsx \
+  --csv-dir output/csv
+```
+
 ---
 
 ## How this maps to your desired final app
